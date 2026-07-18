@@ -269,26 +269,25 @@ st.markdown(
         20px;
 
     }
+    
 
+/* Radio buttons */
+div[role="radiogroup"] {
+    background: #161824;
+    padding: 6px;
+    border-radius: 15px;
+}
 
-    /* Radio buttons */
+/* Monthly / Yearly text */
+div[role="radiogroup"] p {
+    color: white !important;
+    font-weight: 600 !important;
+}
 
-    div[role="radiogroup"] {
-
-        background:
-
-        #161824;
-
-        padding:
-
-        6px;
-
-        border-radius:
-
-        15px;
-
-    }
-
+/* Force all radio content white */
+div[role="radiogroup"] * {
+    c*lor: white !important;
+}
 
     /* Button */
 
@@ -356,7 +355,20 @@ st.markdown(
 
     }
 
+    [data-testid="stMetric"] {
+    background: #161824;
+    padding: 15px;
+    border-radius: 15px;
+    border: 1px solid rgba(255,255,255,.08);
+}
 
+[data-testid="stMetricLabel"] {
+    color: #a7a9bd !important;
+}
+
+[data-testid="stMetricValue"] {
+    color: #1fd5a3 !important;
+}
     </style>
     """,
 
@@ -420,6 +432,8 @@ def calculate_future_value(
     frequency
 
 ):
+    
+
 
 
     if frequency == "Monthly":
@@ -527,7 +541,8 @@ def calculate_future_value(
 
     )
 
-
+def grow_corpus(corpus, annual_return, years):
+    return corpus * ((1 + annual_return / 100) ** years)
 # --------------------------------------------------
 # TITLE
 # --------------------------------------------------
@@ -578,24 +593,7 @@ left, right = st.columns(
 with left:
 
 
-    st.markdown(
-
-        """
-
-        <div class="investment-card">
-
-        <h2>
-
-        Investment Details
-
-        </h2>
-
-        """,
-
-        unsafe_allow_html=True
-
-    )
-
+    
 
     frequency = st.radio(
 
@@ -629,29 +627,6 @@ with left:
     )
 
 
-    investment = st.slider(
-
-        "Adjust investment",
-
-        min_value=500,
-
-        max_value=500_000,
-
-        value=int(
-
-            min(
-
-                investment,
-
-                500_000
-
-            )
-
-        ),
-
-        step=500
-
-    )
 
 
     annual_return = st.number_input(
@@ -669,29 +644,13 @@ with left:
     )
 
 
-    selected_year = st.select_slider(
-
-        "View detailed projection",
-
-        options=[
-
-            10,
-
-            15,
-
-            20,
-
-            25
-
-        ],
-
-        value=10,
-
-        format_func=lambda x:
-
-        f"{x} Years"
-
-    )
+    selected_year = st.number_input(
+    "Years you want to invest in",
+    min_value=1,
+    max_value=40,
+    value=10,
+    step=1
+)
 
 
     st.button(
@@ -715,7 +674,7 @@ with left:
 # --------------------------------------------------
 
 years_list = [
-
+    
     10,
 
     15,
@@ -728,44 +687,49 @@ years_list = [
 
 
 investments = []
-
 future_values = []
+multiples = []
 
+base_investment, base_future, _ = calculate_future_value(
+    investment,
+    annual_return,
+    selected_year,
+    frequency
+)
 
 for year in years_list:
 
+    if year < selected_year:
 
-    invested, future, profit = (
-
-        calculate_future_value(
-
+        # For policy terms smaller than investment term
+        invested, future, _ = calculate_future_value(
             investment,
-
             annual_return,
-
             year,
-
             frequency
-
         )
 
+    elif year == selected_year:
+
+        invested = base_investment
+        future = base_future
+
+    else:
+
+        # Investment stops at selected_year
+        invested = base_investment
+
+        future = base_future * (
+            (1 + annual_return / 100)
+            ** (year - selected_year)
+        )
+
+    investments.append(invested)
+    future_values.append(future)
+
+    multiples.append(
+        round(future / invested, 1)
     )
-
-
-    investments.append(
-
-        invested
-
-    )
-
-
-    future_values.append(
-
-        future
-
-    )
-
-
 # Selected duration
 
 (
@@ -814,7 +778,7 @@ with right:
         <div class="investment-card">
         <div style="color:#9699ae;font-size:15px;">
 
-        Estimated portfolio value
+        Estimated Return
 
         after {selected_year} years
 
@@ -852,78 +816,71 @@ with right:
     # --------------------------------------------------
 
 
+    st.markdown("### Growth Multiple")
+
+    m1 = future_values[0] / investments[0]
+    m2 = future_values[1] / investments[1]
+    m3 = future_values[2] / investments[2]
+    m4 = future_values[3] / investments[3]
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    c1.metric("10 Years", f"{m1:.1f}x")
+    c2.metric("15 Years", f"{m2:.1f}x")
+    c3.metric("20 Years", f"{m3:.1f}x")
+    c4.metric("25 Years", f"{m4:.1f}x")
     figure = go.Figure()
 
 
     figure.add_trace(
+    go.Bar(
+        name="Total Investment",
+        x=[f"{year}Y" for year in years_list],
+        y=investments,
+        marker_color="#514b91",
 
-        go.Bar(
+        text=[
+            indian_currency(v)
+            for v in investments
+        ],
 
-            name=
+        textposition="outside",
 
-            "Total Investment",
+        textfont=dict(
+            color="white",
+            size=11
+        ),
 
-            x=[
-
-                f"{year}Y"
-
-                for year
-
-                in years_list
-
-            ],
-
-            y=investments,
-
-            marker_color=
-
-            "#514b91",
-
-            hovertemplate=
-
-            "Invested: ₹%{y:,.0f}"
-
-            "<extra></extra>"
-
-        )
-
+        hovertemplate=
+        "Invested: ₹%{y:,.0f}"
+        "<extra></extra>"
     )
-
+)
 
     figure.add_trace(
+    go.Bar(
+        name="Estimated Value",
+        x=[f"{year}Y" for year in years_list],
+        y=future_values,
+        marker_color="#927cff",
 
-        go.Bar(
+        text=[
+            indian_currency(v)
+            for v in future_values
+        ],
 
-            name=
+        textposition="outside",
 
-            "Estimated Value",
+        textfont=dict(
+            color="white",
+            size=11
+        ),
 
-            x=[
-
-                f"{year}Y"
-
-                for year
-
-                in years_list
-
-            ],
-
-            y=future_values,
-
-            marker_color=
-
-            "#927cff",
-
-            hovertemplate=
-
-            "Portfolio: ₹%{y:,.0f}"
-
-            "<extra></extra>"
-
-        )
-
+        hovertemplate=
+        "Portfolio: ₹%{y:,.0f}"
+        "<extra></extra>"
     )
-
+)
 
     figure.update_layout(
 
@@ -956,11 +913,12 @@ with right:
         ),
 
         legend=dict(
-
             orientation="h",
-
-            y=1.12
-
+            y=1.12,
+            font=dict(
+                color="white",
+                size=12
+            )
         ),
 
         xaxis=dict(
