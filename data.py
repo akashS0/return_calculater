@@ -68,6 +68,12 @@ st.markdown(
         text-transform: uppercase;
     }
     label p { color: #334155 !important; font-weight: 600 !important; }
+    .amount-words {
+        color: #1D4ED8;
+        font-size: 13px;
+        font-weight: 600;
+        margin-top: -8px;
+    }
 
     /* Button */
     .stButton button {
@@ -224,6 +230,36 @@ def indian_currency(amount):
         return f"₹{amount:,.0f}"
 
 
+ONES = [
+    "", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
+    "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen",
+    "Seventeen", "Eighteen", "Nineteen",
+]
+TENS = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"]
+
+
+def number_in_words(n):
+    # Indian numbering system: thousand, lakh, crore.
+    n = int(n)
+    if n == 0:
+        return "Zero"
+    if n < 20:
+        return ONES[n]
+    if n < 100:
+        return f"{TENS[n // 10]} {ONES[n % 10]}".strip()
+    if n < 1000:
+        rest = f" {number_in_words(n % 100)}" if n % 100 else ""
+        return f"{ONES[n // 100]} Hundred{rest}"
+    for divisor, name in [(10_000_000, "Crore"), (100_000, "Lakh"), (1000, "Thousand")]:
+        if n >= divisor:
+            rest = f" {number_in_words(n % divisor)}" if n % divisor else ""
+            return f"{number_in_words(n // divisor)} {name}{rest}"
+
+
+def amount_in_words(amount):
+    render_html(f'<div class="amount-words">{number_in_words(amount)} Rupees</div>')
+
+
 def calculate_future_value(investment, annual_return, years, frequency):
     if frequency == "Monthly":
         periods = years * 12
@@ -253,11 +289,137 @@ def projected_corpus(investment, annual_return, years_to_invest, policy_term, fr
     return total_investment, corpus
 
 
+def required_investment(goal_amount, annual_return, years_to_invest, period, frequency):
+    # Inverse of projected_corpus: what one unit invested per period
+    # grows to by the end of the period, scaled up to reach the goal.
+    _, value_of_one = projected_corpus(1, annual_return, years_to_invest, period, frequency)
+    return goal_amount / value_of_one
+
+
+# Runs in a same-origin component iframe: captures the visible page
+# (the parent document's .block-container) and saves it as PNG or PDF.
+DOWNLOAD_WIDGET = """
+<style>
+    body { margin: 0; font-family: "Source Sans Pro", sans-serif; }
+    .bar { display: flex; gap: 8px; justify-content: flex-end; padding: 4px 2px; }
+    button {
+        background: #FFFFFF;
+        border: 1.5px solid #1D4ED8;
+        border-radius: 10px;
+        color: #1D4ED8;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 700;
+        height: 40px;
+        padding: 0 14px;
+        transition: .2s;
+    }
+    button:hover { background: #F97316; border-color: #F97316; color: #FFFFFF; }
+    button:disabled { cursor: wait; opacity: .6; }
+</style>
+<div class="bar">
+    <button id="png">&#11015; Download Image</button>
+    <button id="pdf">&#11015; Download PDF</button>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script>
+    const FILENAME = "__FILENAME__";
+    const SCALE = 2;
+    const HTML2CANVAS_URL = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
+    const host = window.parent;
+
+    // html2canvas must run in the app's own window: a canvas created in this
+    // iframe lacks the app's fonts, so words get drawn in a wider fallback
+    // font at positions measured with the real one and run together.
+    function loadHtml2canvas() {
+        if (host.html2canvas) return Promise.resolve();
+        return new Promise((resolve, reject) => {
+            const script = host.document.createElement("script");
+            script.src = HTML2CANVAS_URL;
+            script.onload = resolve;
+            script.onerror = () => reject(new Error("Could not load html2canvas"));
+            host.document.head.appendChild(script);
+        });
+    }
+
+    async function capturePage() {
+        await loadHtml2canvas();
+        await host.document.fonts.ready;
+        const page = host.document.querySelector(".block-container");
+        return host.html2canvas(page, {
+            scale: SCALE,
+            backgroundColor: "#FFFFFF",
+            useCORS: true,
+            ignoreElements: (node) => node.tagName === "IFRAME",
+            // html2canvas paints a button's background over its label unless
+            // the label is positioned; do that in the copy it draws from.
+            onclone: (doc) => {
+                for (const label of doc.querySelectorAll("button p")) {
+                    label.style.position = "relative";
+                }
+            },
+        });
+    }
+
+    function saveBlob(blob, name) {
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = name;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    }
+
+    async function run(button, save) {
+        const label = button.innerHTML;
+        button.disabled = true;
+        button.innerHTML = "Preparing&hellip;";
+        try {
+            save(await capturePage());
+        } catch (err) {
+            console.error(err);
+            alert("Sorry, the download could not be created. Please try again.");
+        } finally {
+            button.disabled = false;
+            button.innerHTML = label;
+        }
+    }
+
+    document.getElementById("png").onclick = (e) => run(e.currentTarget, (canvas) => {
+        canvas.toBlob((blob) => saveBlob(blob, FILENAME + ".png"), "image/png");
+    });
+
+    document.getElementById("pdf").onclick = (e) => run(e.currentTarget, (canvas) => {
+        // One page sized to the captured area, so nothing is cut off.
+        const width = canvas.width / SCALE;
+        const height = canvas.height / SCALE;
+        const pdf = new window.jspdf.jsPDF({
+            orientation: width > height ? "landscape" : "portrait",
+            unit: "px",
+            format: [width, height],
+            hotfixes: ["px_scaling"],
+        });
+        pdf.addImage(canvas.toDataURL("image/png"), "PNG", 0, 0, width, height);
+        pdf.save(FILENAME + ".pdf");
+    });
+</script>
+"""
+
+
+def download_buttons(filename):
+    st.iframe(DOWNLOAD_WIDGET.replace("__FILENAME__", filename), height=52)
+
+
 def section_header(title, subtitle):
-    render_html(f"""
-        <div class="section-title">{title}</div>
-        <div class="section-sub">{subtitle}</div>
-    """)
+    head, actions = st.columns([0.62, 0.38], vertical_alignment="center")
+    with head:
+        render_html(f"""
+            <div class="section-title">{title}</div>
+            <div class="section-sub">{subtitle}</div>
+        """)
+    with actions:
+        download_buttons(title.lower().replace(" ", "-"))
 
 
 def plan_inputs(key_prefix, button_label):
@@ -279,6 +441,7 @@ def plan_inputs(key_prefix, button_label):
             step=500,
             key=f"{key_prefix}_investment",
         )
+        amount_in_words(investment)
 
         annual_return = st.number_input(
             "Expected Annual Return (%)",
@@ -339,9 +502,33 @@ def stat_card(label, value, accent=False):
     )
 
 
-pension_tab, growth_tab = st.tabs([
+def disclaimer(include_pension=False):
+    pension_line = (
+        "<li>Pension figures assume 60% of the corpus is paid as a lump sum and the remaining "
+        "40% is converted into a pension at a monthly annuity rate of 0.741%. Actual annuity "
+        "rates and policy benefits depend on the insurer and prevailing rates at the time of vesting.</li>"
+        if include_pension else ""
+    )
+    render_html(f"""
+        <div class="tnc">
+            <div class="tnc-title">Important: Terms &amp; Disclaimer</div>
+            <ul>
+                <li>All figures shown are <b>estimates for illustration only</b>. They are not
+                    guaranteed, and <b>actual returns may differ</b>.</li>
+                <li>Calculations assume a constant annual rate of return and contributions made at
+                    the start of each period. Real investment returns fluctuate with market conditions.</li>
+                {pension_line}
+                <li>This calculator does not constitute financial advice. Please read the policy documents
+                    carefully and consult a qualified financial advisor before investing.</li>
+            </ul>
+        </div>
+    """)
+
+
+pension_tab, growth_tab, goal_tab = st.tabs([
     "Pension Plan Calculator",
     "Investment Growth Calculator",
+    "I Know My Goal",
 ])
 
 
@@ -400,6 +587,8 @@ with pension_tab:
             </div>
         """)
 
+    disclaimer(include_pension=True)
+
 
 # --------------------------------------------------
 # INVESTMENT GROWTH CALCULATOR
@@ -430,24 +619,115 @@ with growth_tab:
             [f"Policy term: {policy_term} years", f"Investing for {years_to_invest} years"],
         )
 
+    disclaimer()
+
 
 # --------------------------------------------------
-# TERMS & DISCLAIMER
+# I KNOW MY GOAL
 # --------------------------------------------------
 
-render_html("""
-    <div class="tnc">
-        <div class="tnc-title">Important: Terms &amp; Disclaimer</div>
-        <ul>
-            <li>All figures shown are <b>estimates for illustration only</b>. They are not
-                guaranteed, and <b>actual returns may differ</b>.</li>
-            <li>Calculations assume a constant annual rate of return and contributions made at
-                the start of each period. Real investment returns fluctuate with market conditions.</li>
-            <li>Pension figures assume 60% of the corpus is paid as a lump sum and the remaining
-                40% is converted into a pension at a monthly annuity rate of 0.741%. Actual annuity
-                rates and policy benefits depend on the insurer and prevailing rates at the time of vesting.</li>
-            <li>This calculator does not constitute financial advice. Please read the policy documents
-                carefully and consult a qualified financial advisor before investing.</li>
-        </ul>
-    </div>
-""")
+with goal_tab:
+
+    section_header(
+        "I Know My Goal",
+        "Enter your target maturity amount to find out how much you need to invest.",
+    )
+
+    left, right = st.columns([0.38, 0.62], gap="large")
+
+    with left:
+        with st.container(key="card_goal_inputs"):
+            render_html('<div class="card-label">Your goal details</div>')
+
+            goal_frequency = st.radio(
+                "Investment Frequency",
+                ["Monthly", "Yearly"],
+                horizontal=True,
+                key="goal_frequency",
+            )
+
+            goal_amount = st.number_input(
+                "Maturity Amount (₹)",
+                min_value=10_000,
+                max_value=1_000_000_000,
+                value=1_000_000,
+                step=10_000,
+                key="goal_amount",
+            )
+            amount_in_words(goal_amount)
+
+            goal_invest_years = st.number_input(
+                "Years you want to invest in",
+                min_value=1,
+                max_value=40,
+                value=10,
+                step=1,
+                key="goal_invest_years",
+            )
+
+            goal_years = st.number_input(
+                "Period (Years)",
+                min_value=goal_invest_years,
+                max_value=60,
+                value=max(15, goal_invest_years),
+                step=1,
+                key="goal_years",
+            )
+
+            goal_return = st.number_input(
+                "Expected Annual Return (%)",
+                min_value=0.0,
+                max_value=50.0,
+                value=12.0,
+                step=0.5,
+                key="goal_return",
+            )
+
+            st.button("Calculate Required Investment", type="primary", key="goal_calculate")
+
+    monthly_needed = required_investment(
+        goal_amount, goal_return, goal_invest_years, goal_years, "Monthly"
+    )
+    yearly_needed = required_investment(
+        goal_amount, goal_return, goal_invest_years, goal_years, "Yearly"
+    )
+
+    if goal_frequency == "Monthly":
+        investment_needed = monthly_needed
+        total_invested = monthly_needed * goal_invest_years * 12
+    else:
+        investment_needed = yearly_needed
+        total_invested = yearly_needed * goal_invest_years
+    wealth_gain = goal_amount - total_invested
+
+    with right:
+        result_hero(
+            f"Required {goal_frequency} Investment",
+            f"₹{investment_needed:,.0f}",
+            [
+                f"Goal: {indian_currency(goal_amount)}",
+                f"Investing for {goal_invest_years} years",
+                f"Period: {goal_years} years",
+            ],
+        )
+
+        render_html(
+            '<div class="stat-grid">'
+            + stat_card("Monthly Investment", f"₹{monthly_needed:,.0f}", accent=goal_frequency == "Monthly")
+            + stat_card("Yearly Investment", f"₹{yearly_needed:,.0f}", accent=goal_frequency == "Yearly")
+            + stat_card("Total Investment", indian_currency(total_invested))
+            + stat_card("Wealth Gain", indian_currency(wealth_gain))
+            + "</div>"
+        )
+
+        render_html(f"""
+            <div class="note">
+                <b>Plan summary:</b> To reach <b>{indian_currency(goal_amount)}</b> in
+                <b>{goal_years} years</b> at an expected return of <b>{goal_return:g}%</b> a year,
+                you need to invest about <span class="hl">₹{investment_needed:,.0f}</span>
+                {"every month" if goal_frequency == "Monthly" else "every year"}
+                for <b>{goal_invest_years} years</b>.
+            </div>
+        """)
+
+    disclaimer()
